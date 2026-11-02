@@ -1,67 +1,56 @@
-# WordPress RAG-CoT Chatbot
+# WordPress RAG: Chunking, Retrieval & Evidence Trail
 
-This project implements a chatbot that uses Retrieval-Augmented Generation (RAG) and Chain of Thought (CoT) reasoning to answer queries based on content from a WordPress site. The chatbot fetches content, generates embeddings, performs similarity searches, and provides step-by-step reasoning for its responses.
+A Streamlit RAG app for public WordPress posts. It fetches posts, cleans HTML, splits long content into overlapping chunks, embeds each chunk, retrieves the closest passages, and displays source evidence alongside the answer.
 
-## Features
+**Reasoning clarification:** this project provides concise, user-facing evidence steps—not a claim to reveal a model's private internal chain-of-thought. The useful target is an answer that can be checked against cited sources, with uncertainty made explicit.
 
-- Fetch content from WordPress sites
-- Generate embeddings for text content
-- Perform vector similarity search
-- Implement RAG (Retrieval-Augmented Generation) for relevant information retrieval
-- Utilize Chain of Thought reasoning for step-by-step analysis
-- Provide a simple command-line interface for user interaction
+## Pipeline
 
-## Requirements
+1. **Ingestion:** fetch public posts using the WordPress REST API with pagination.
+2. **Cleaning:** strip rendered HTML and normalize whitespace.
+3. **Chunking:** split into approximately 900-character chunks with 150-character overlap so facts near boundaries are less likely to be lost.
+4. **Embedding:** encode chunks with `sentence-transformers/all-MiniLM-L6-v2`.
+5. **Indexing:** FAISS `IndexFlatIP` over L2-normalized vectors. Inner product is cosine similarity for normalized vectors.
+6. **Retrieval:** embed the question and retrieve up to top-k chunks. k is clamped to the number of indexed vectors and invalid FAISS indices (including -1) are skipped.
+7. **Answer generation:** set `OPENAI_API_KEY` to generate an answer and short evidence steps from retrieved passages. Without a key, the app clearly shows a retrieval-only fallback instead of pretending an LLM generated an answer.
+8. **Inspection:** review retrieved passages, similarity scores, and source links in Streamlit.
 
-- Python 3.6+
-- Libraries: requests, json, faiss, numpy, sentence_transformers
+## Run
 
-## Installation
+Python 3.10 or 3.11 is recommended.
 
-1. Clone this repository:
-   
+```bash
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-2. Install the required libraries:
-   
+Use the sidebar to enter a site exposing `/wp-json/wp/v2/posts`, then click **Fetch and index**.
 
-## Usage
+### Optional generation
 
-1. Run the main script:
-   
+Set `OPENAI_API_KEY` in your environment before starting Streamlit. Optionally set `OPENAI_MODEL` (default: `gpt-4o-mini`). Never commit API keys. The model is prompted to answer from the retrieved context and return an answer, evidence steps, and source labels. These steps are explanatory summaries—not formal proofs—so inspect the citations.
 
-2. The chatbot will fetch content from the specified WordPress site (default is TechCrunch).
+## Evaluation
 
-3. Once loaded, you can start interacting with the chatbot by typing your queries.
+Retrieval should be evaluated on a manually labelled dataset of questions and relevant WordPress post IDs. Useful metrics include Hit Rate@k, Recall@k, MRR@k, and nDCG@k. These measure retrieval quality, not generation faithfulness or reasoning quality. Evaluate those separately with manually reviewed reference answers and source-grounding checks. Do not report a metric unless it was actually run on a documented dataset.
 
-4. Type 'exit' to end the conversation.
+## Known limitations
 
-## Code Structure
+- The active FAISS index lives in Streamlit session memory and is rebuilt after indexing; it is not persistent shared storage.
+- No incremental refresh, deletion sync, or robust content-hash deduplication is implemented.
+- Character-based chunking is a simple baseline, not semantic chunking.
+- Similarity scores are not probabilities of correctness.
+- The LLM can still hallucinate or misattribute evidence; verify sources.
+- The app does not expose hidden chain-of-thought.
 
-1. **Data Retrieval**: The `fetch_wp_content` function retrieves content from a WordPress site using its API.
+## Files
 
-2. **Embedding Generator**: Utilizes the SentenceTransformer library to generate embeddings for text content.
+- `app.py` — active Streamlit RAG app.
+- `rag-cot-chatbot.py`, `python chatbot_api.py`, `ai-chatbot-integration.php` — legacy prototype files retained for reference; the new app does not require PHP or the WordPress plugin.
 
-3. **Vector Database**: Initializes a Faiss index for efficient similarity search.
+## Next improvements
 
-4. **RAG Processor**: The `rag_processor` function retrieves relevant content based on a user query using vector similarity search.
-
-5. **Chain of Thought Module**: The `chain_of_thought` function implements a simplified thought process for analyzing and responding to queries.
-
-6. **User Interface**: The `chatbot_interface` function provides a command-line interface for interacting with the chatbot.
-
-## Customization
-
-- To use a different WordPress site, modify the `site_url` variable in the main execution block.
-- Adjust the `top_k` parameter in the `rag_processor` function to retrieve more or fewer relevant texts.
-- Modify the `chain_of_thought` function to implement more sophisticated reasoning processes.
-
-## Limitations
-
-- The chatbot's knowledge is limited to the content fetched from the specified WordPress site.
-- The current implementation uses a simplified Chain of Thought process and does not include a language model for generating responses.
-
-## Contributing
-
-Contributions to improve the chatbot's functionality or efficiency are welcome. Please submit a pull request or open an issue to discuss proposed changes.
-
-
+Persistent vector storage, incremental ingestion, per-user isolation, hybrid lexical+dense retrieval, reranking, and a manually reviewed answer faithfulness evaluation set.
