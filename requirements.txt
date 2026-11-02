@@ -1,7 +1,7 @@
-requests
-tokenizer
-transformers
-sentence_transformers
-faiss-cpu
-numpy
-pypr
+streamlit>=1.35
+requests>=2.31
+beautifulsoup4>=4.12
+numpy>=1.26
+faiss-cpu>=1.8
+sentence-transformers>=3.0
+openai>=1.40
