@@ -1,7 +1,7 @@
-streamlit>=1.35
-requests>=2.31
-beautifulsoup4>=4.12
-numpy>=1.26
+streamlit>=1.35,<2
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+numpy>=1.26,<2
 faiss-cpu>=1.8
-sentence-transformers>=3.0
-openai>=1.40
+sentence-transformers>=3.0,<6
+openai>=1.40,<3
