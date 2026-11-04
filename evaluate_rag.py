@@ -1,43 +1,87 @@
-import argparse, json, math
+"""Evaluate retrieval against manually labelled WordPress post IDs.
+Example: python evaluate_rag.py --dataset eval_dataset.example.json --site https://techcrunch.com --pages 2 --k 3
+Metrics are calculated over unique posts (not duplicate chunks from the same post).
+"""
+import argparse, json, math, re
 import numpy as np, requests, faiss
 from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 
-def clean(s): return " ".join(BeautifulSoup(s or "", "html.parser").get_text(" ").split())
-def split(s, size=900, overlap=150):
-    s=" ".join(s.split()); out=[]; start=0
-    while start<len(s):
-        end=min(start+size,len(s)); out.append(s[start:end].strip())
-        if end==len(s): break
-        start=end-overlap
-    return [x for x in out if x]
-def main():
-    p=argparse.ArgumentParser(); p.add_argument("--dataset",required=True); p.add_argument("--site",required=True); p.add_argument("--k",type=int,default=3); p.add_argument("--pages",type=int,default=3); a=p.parse_args()
-    cases=json.load(open(a.dataset,encoding="utf-8")); docs=[]
-    for page in range(1,a.pages+1):
-        r=requests.get(a.site.rstrip("/")+"/wp-json/wp/v2/posts",params={"page":page,"per_page":100,"_fields":"id,title,content"},timeout=20)
-        if r.status_code==400 and page>1: break
-        r.raise_for_status(); batch=r.json()
+def clean(s):
+    return re.sub(r"\s+", " ", BeautifulSoup(s or "", "html.parser").get_text(" ", strip=True)).strip()
+
+def split(text, size=900, overlap=150):
+    text = re.sub(r"\s+", " ", text).strip()
+    if size <= 0 or overlap < 0 or overlap >= size:
+        raise ValueError("Require size > 0 and 0 <= overlap < size")
+    out, start = [], 0
+    while start < len(text):
+        end = min(start + size, len(text))
+        if end < len(text):
+            boundary = text.rfind(" ", start + int(size * .7), end)
+            if boundary > start: end = boundary
+        if text[start:end].strip(): out.append(text[start:end].strip())
+        if end >= len(text): break
+        start = max(end - overlap, start + 1)
+    return out
+
+def fetch(site, pages):
+    docs = []
+    for page in range(1, pages + 1):
+        response = requests.get(site.rstrip("/") + "/wp-json/wp/v2/posts",
+            params={"page": page, "per_page": 100, "_fields": "id,title,content"}, timeout=20)
+        if response.status_code == 400 and page > 1: break
+        response.raise_for_status()
+        batch = response.json()
         for post in batch:
-            text=clean(post.get("title",{}).get("rendered",""))+" "+clean(post.get("content",{}).get("rendered",""))
-            docs += [{"id":int(post["id"]),"text":c} for c in split(text)]
-        if len(batch)<100: break
+            title = clean(post.get("title", {}).get("rendered", ""))
+            body = clean(post.get("content", {}).get("rendered", ""))
+            for chunk in split((title + "\n\n" + body).strip()):
+                docs.append({"post_id": int(post["id"]), "text": chunk})
+        if len(batch) < 100: break
+    return docs
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--site", required=True)
+    parser.add_argument("--pages", type=int, default=3)
+    parser.add_argument("--k", type=int, default=3)
+    args = parser.parse_args()
+    with open(args.dataset, encoding="utf-8") as f: cases = json.load(f)
+    docs = fetch(args.site, args.pages)
     if not docs: raise SystemExit("No posts fetched.")
-    model=SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    vec=np.asarray(model.encode([d["text"] for d in docs],normalize_embeddings=True),dtype="float32")
-    index=faiss.IndexFlatIP(vec.shape[1]); index.add(vec); totals=[0.,0.,0.,0.]; count=0
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    vectors = np.asarray(model.encode([d["text"] for d in docs], normalize_embeddings=True), dtype="float32")
+    index = faiss.IndexFlatIP(vectors.shape[1]); index.add(vectors)
+    totals = {"hit_rate": 0., "recall": 0., "mrr": 0., "ndcg": 0.}; count = 0
     for case in cases:
-        relevant=set(map(int,case["relevant_post_ids"]))
+        relevant = set(map(int, case["relevant_post_ids"]))
         if not relevant: continue
-        q=np.asarray(model.encode([case["question"]],normalize_embeddings=True),dtype="float32")
-        _,ids=index.search(q,min(max(1,a.k),index.ntotal)); ranked=[docs[int(i)]["id"] for i in ids[0] if 0<=i<len(docs)]
-        hit=float(any(x in relevant for x in ranked)); recall=len(set(ranked)&relevant)/len(relevant)
-        rr=next((1/(i+1) for i,x in enumerate(ranked) if x in relevant),0.)
-        dcg=sum(1/math.log2(i+2) for i,x in enumerate(ranked) if x in relevant); ideal=sum(1/math.log2(i+2) for i in range(min(len(relevant),a.k)))
-        ndcg=dcg/ideal if ideal else 0.; vals=[hit,recall,rr,ndcg]
-        totals=[x+y for x,y in zip(totals,vals)]; count+=1
-        print(case["question"], dict(zip(["hit_rate","recall","mrr","ndcg"],[round(x,3) for x in vals])))
+        query = np.asarray(model.encode([case["question"]], normalize_embeddings=True), dtype="float32")
+        _, ids = index.search(query, min(max(1, args.k * 5), index.ntotal))
+        # Collapse multiple retrieved chunks from the same post, preserving first/best rank.
+        ranked, seen = [], set()
+        for idx in ids[0]:
+            if idx < 0 or idx >= len(docs): continue
+            post_id = docs[int(idx)]["post_id"]
+            if post_id not in seen:
+                ranked.append(post_id); seen.add(post_id)
+            if len(ranked) == args.k: break
+        hit = float(any(pid in relevant for pid in ranked))
+        recall = len(set(ranked) & relevant) / len(relevant)
+        mrr = next((1. / (rank + 1) for rank, pid in enumerate(ranked) if pid in relevant), 0.)
+        dcg = sum(1. / math.log2(rank + 2) for rank, pid in enumerate(ranked) if pid in relevant)
+        ideal = sum(1. / math.log2(rank + 2) for rank in range(min(len(relevant), args.k)))
+        ndcg = dcg / ideal if ideal else 0.
+        values = {"hit_rate": hit, "recall": recall, "mrr": mrr, "ndcg": ndcg}
+        for name, value in values.items(): totals[name] += value
+        count += 1
+        print(case["question"], {name: round(value, 3) for name, value in values.items()})
     if not count: raise SystemExit("No labelled evaluation cases.")
-    print("Macro averages @",a.k,dict(zip(["hit_rate","recall","mrr","ndcg"],[round(x/count,4) for x in totals])))
+    print(f"\nMacro averages over {count} queries (k={args.k}):")
+    for name, value in totals.items(): print(f"{name}@{args.k}: {value / count:.4f}")
     print("Retrieval metrics only; they do not measure generation faithfulness or reasoning correctness.")
-if __name__=="__main__": main()
+
+if __name__ == "__main__":
+    main()
