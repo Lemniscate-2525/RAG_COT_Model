@@ -1,0 +1,10 @@
+[
+  {
+    "question": "What does the article report about the product launch?",
+    "relevant_post_ids": [123456]
+  },
+  {
+    "question": "Which companies are mentioned in the funding announcement?",
+    "relevant_post_ids": [234567, 345678]
+  }
+]
