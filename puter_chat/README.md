@@ -56,3 +56,4 @@ Navigate to `http://localhost:3000`.
 
 This application is built with Puter.js.
 Visit [developer.puter.com](https://developer.puter.com) for official documentation, SDKs, and platform capabilities.
+

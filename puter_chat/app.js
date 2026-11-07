@@ -730,3 +730,4 @@ function setupEventListeners() {
 
     elements.scrollToBottomBtn.onclick = scrollToBottom;
 }
+
