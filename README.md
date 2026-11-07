@@ -49,7 +49,10 @@ Retrieval should be evaluated on a manually labelled dataset of questions and re
 ## Files
 
 - `app.py` — active Streamlit RAG app.
-- `rag-cot-chatbot.py`, `python chatbot_api.py`, `ai-chatbot-integration.php` — legacy prototype files retained for reference; the new app does not require PHP or the WordPress plugin.
+- `evaluate_rag.py` — labelled retrieval evaluation script.
+- `rag-cot-chatbot.py`, `chatbot_api.py` — legacy prototypes retained for reference.
+
+The active application is Python + Streamlit; it does not require PHP or a WordPress plugin.
 
 ## Next improvements
 
