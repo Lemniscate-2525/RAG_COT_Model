@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Puter AI Chat — Multi-Model AI Assistant</title>
+    <!-- Puter.js SDK (Required) -->
+    <script src="https://js.puter.com/v2/"></script>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Marked for Markdown Parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Highlight.js for Syntax Highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="style.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-slate-900 text-slate-100 flex flex-col font-sans antialiased overflow-hidden">
+
+    <!-- Top App Navigation Bar -->
+    <header class="h-14 border-b border-slate-800 bg-slate-950/80 backdrop-blur px-4 flex items-center justify-between shrink-0 z-20">
+        <div class="flex items-center gap-3">
+            <button id="sidebarToggleBtn" class="md:hidden text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-sky-500/20">
+                    <i class="fa-solid fa-wand-magic-sparkles text-sm"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-sm leading-tight tracking-wide flex items-center gap-2">
+                        Puter AI Chat
+                        <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">No API Key Needed</span>
+                    </h1>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Model Selector -->
+        <div class="hidden sm:flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl px-2 py-1 shadow-inner">
+            <i class="fa-solid fa-microchip text-xs text-sky-400 ml-1"></i>
+            <select id="modelSelect" class="bg-transparent text-xs font-medium text-slate-200 focus:outline-none cursor-pointer pr-2 py-0.5">
+                <option value="gpt-4o-mini" selected>OpenAI — GPT-4o Mini (Default)</option>
+                <option value="gpt-4o">OpenAI — GPT-4o (Flagship)</option>
+                <option value="claude-3-5-sonnet">Anthropic — Claude 3.5 Sonnet</option>
+                <option value="claude-3-5-haiku">Anthropic — Claude 3.5 Haiku</option>
+                <option value="gemini-2.0-flash">Google — Gemini 2.0 Flash</option>
+                <option value="deepseek-chat">DeepSeek — DeepSeek V3</option>
+                <option value="mistral-large">Mistral — Mistral Large</option>
+            </select>
+        </div>
+
+        <!-- Right: Auth & Settings -->
+        <div class="flex items-center gap-2">
+            <!-- Puter User / Login Pill -->
+            <div id="userProfileArea">
+                <button id="authBtn" class="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg transition font-medium">
+                    <i class="fa-solid fa-user-circle text-sky-400"></i>
+                    <span id="authBtnText">Sign In to Puter</span>
+                </button>
+            </div>
+
+            <!-- Settings Button -->
+            <button id="settingsBtn" title="Chat Settings" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition">
+                <i class="fa-solid fa-sliders text-sm"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- Left Sidebar: Chat Sessions -->
+        <aside id="sidebar" class="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 transition-all duration-300 z-10 absolute md:static inset-y-0 left-0 -translate-x-full md:translate-x-0">
+            <!-- New Chat Button -->
+            <div class="p-3 border-b border-slate-800/80">
+                <button id="newChatBtn" class="w-full bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-medium text-xs py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-sky-900/20">
+                    <i class="fa-solid fa-plus text-xs"></i>
+                    <span>New Conversation</span>
+                </button>
+            </div>
+
+            <!-- Sessions List -->
+            <div class="flex-1 overflow-y-auto p-2 space-y-1" id="sessionsList">
+                <!-- Dynamically populated -->
+            </div>
+
+            <!-- Cloud Sync Status & Storage -->
+            <div class="p-3 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                    <span id="cloudSyncIndicator" class="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                    <span id="cloudSyncText">Local Storage</span>
+                </div>
+                <button id="clearAllBtn" title="Clear All Chats" class="hover:text-red-400 transition">
+                    <i class="fa-regular fa-trash-can"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Chat Container -->
+        <main class="flex-1 flex flex-col bg-slate-900 overflow-hidden relative">
+
+            <!-- Messages Stream Area -->
+            <div id="messagesContainer" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                <!-- Empty state shown when no messages -->
+                <div id="emptyState" class="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto px-4">
+                    <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-2xl text-white shadow-xl shadow-sky-500/20 mb-4 animate-bounce">
+                        <i class="fa-solid fa-sparkles"></i>
+                    </div>
+                    <h2 class="text-xl font-bold text-white mb-2">How can Puter AI help you today?</h2>
+                    <p class="text-xs text-slate-400 mb-6 leading-relaxed">
+                        Powered by Puter.js — call leading models like GPT-4o, Claude 3.5 Sonnet, and Gemini directly in your browser with zero API keys.
+                    </p>
+
+                    <!-- Quick Starter Prompts -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
+                        <button class="starter-prompt p-3 rounded-xl border border-slate-800 bg-slate-950/60 hover:bg-slate-800/60 hover:border-sky-500/40 transition group">
+                            <div class="font-medium text-xs text-slate-200 group-hover:text-sky-400 flex items-center gap-1.5 mb-1">
+                                <i class="fa-solid fa-code text-sky-400 text-[10px]"></i> Write Clean Code
+                            </div>
+                            <div class="text-[11px] text-slate-400">Write a Python script for semantic text chunking with overlap.</div>
+                        </button>
+                        <button class="starter-prompt p-3 rounded-xl border border-slate-800 bg-slate-950/60 hover:bg-slate-800/60 hover:border-sky-500/40 transition group">
+                            <div class="font-medium text-xs text-slate-200 group-hover:text-sky-400 flex items-center gap-1.5 mb-1">
+                                <i class="fa-solid fa-brain text-purple-400 text-[10px]"></i> Explain Complex Ideas
+                            </div>
+                            <div class="text-[11px] text-slate-400">Explain how FAISS inner-product implements cosine similarity.</div>
+                        </button>
+                        <button class="starter-prompt p-3 rounded-xl border border-slate-800 bg-slate-950/60 hover:bg-slate-800/60 hover:border-sky-500/40 transition group">
+                            <div class="font-medium text-xs text-slate-200 group-hover:text-sky-400 flex items-center gap-1.5 mb-1">
+                                <i class="fa-solid fa-shield-halved text-emerald-400 text-[10px]"></i> Security Analysis
+                            </div>
+                            <div class="text-[11px] text-slate-400">What are the top defenses against SSRF in web applications?</div>
+                        </button>
+                        <button class="starter-prompt p-3 rounded-xl border border-slate-800 bg-slate-950/60 hover:bg-slate-800/60 hover:border-sky-500/40 transition group">
+                            <div class="font-medium text-xs text-slate-200 group-hover:text-sky-400 flex items-center gap-1.5 mb-1">
+                                <i class="fa-solid fa-pen-nib text-amber-400 text-[10px]"></i> Creative & Writing
+                            </div>
+                            <div class="text-[11px] text-slate-400">Draft a technical blog introduction for an explainable AI chatbot.</div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Messages will be rendered here dynamically -->
+            </div>
+
+            <!-- Scroll to bottom button -->
+            <button id="scrollToBottomBtn" class="hidden absolute bottom-28 right-6 w-9 h-9 rounded-full bg-slate-800 text-slate-300 hover:text-white border border-slate-700 shadow-lg flex items-center justify-center transition">
+                <i class="fa-solid fa-arrow-down text-xs"></i>
+            </button>
+
+            <!-- Attachment Preview Bar -->
+            <div id="attachmentPreview" class="hidden mx-4 md:mx-6 mb-2 p-2 bg-slate-800/90 border border-slate-700 rounded-xl flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <img id="attachmentThumb" src="" alt="preview" class="w-8 h-8 rounded object-cover border border-slate-600 hidden">
+                    <i id="attachmentFileIcon" class="fa-solid fa-file text-sky-400 ml-1"></i>
+                    <span id="attachmentName" class="truncate font-medium text-slate-200">file.txt</span>
+                </div>
+                <button id="removeAttachmentBtn" class="text-slate-400 hover:text-red-400 px-2">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Input Bar -->
+            <div class="p-4 md:p-6 bg-slate-950/60 border-t border-slate-800/80 backdrop-blur">
+                <form id="chatForm" class="max-w-4xl mx-auto flex flex-col bg-slate-900 border border-slate-700/80 focus-within:border-sky-500/80 rounded-2xl shadow-xl transition-all">
+                    
+                    <!-- Textarea -->
+                    <textarea 
+                        id="promptInput" 
+                        rows="1" 
+                        placeholder="Message Puter AI (Shift+Enter for newline)..." 
+                        class="w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 px-4 pt-3.5 pb-2 focus:outline-none resize-none max-h-48 overflow-y-auto"
+                    ></textarea>
+
+                    <!-- Bottom Controls Toolbar -->
+                    <div class="flex items-center justify-between px-3 pb-2.5 pt-1">
+                        <div class="flex items-center gap-2">
+                            <!-- File Attachment Button -->
+                            <input type="file" id="fileInput" class="hidden" accept="image/*,.pdf,.txt,.md,.json">
+                            <button type="button" id="attachBtn" title="Attach image or file for multimodal models" class="text-slate-400 hover:text-sky-400 p-1.5 rounded-lg hover:bg-slate-800 transition">
+                                <i class="fa-solid fa-paperclip text-sm"></i>
+                            </button>
+
+                            <!-- Mobile Model Selector -->
+                            <div class="sm:hidden">
+                                <select id="mobileModelSelect" class="bg-slate-800 text-[10px] text-slate-300 rounded px-1.5 py-1 border border-slate-700">
+                                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                                    <option value="gpt-4o">GPT-4o</option>
+                                    <option value="claude-3-5-sonnet">Claude 3.5</option>
+                                    <option value="gemini-2.0-flash">Gemini 2.0</option>
+                                </select>
+                            </div>
+
+                            <span id="typingStatus" class="hidden text-[11px] text-sky-400 animate-pulse flex items-center gap-1.5 font-medium ml-2">
+                                <i class="fa-solid fa-circle-notch fa-spin text-[10px]"></i>
+                                <span>Puter is thinking...</span>
+                            </span>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <!-- Stop Button -->
+                            <button type="button" id="stopBtn" class="hidden bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 text-xs px-3 py-1.5 rounded-xl transition font-medium flex items-center gap-1.5">
+                                <i class="fa-solid fa-stop text-[10px]"></i> Stop
+                            </button>
+
+                            <!-- Send Button -->
+                            <button type="submit" id="sendBtn" class="bg-sky-500 hover:bg-sky-400 text-white w-8 h-8 rounded-xl flex items-center justify-center transition shadow-md shadow-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed">
+                                <i class="fa-solid fa-arrow-up text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Mandatory Footer Requirement: Powered by Puter -->
+                <div class="text-center mt-3 text-[11px] text-slate-500 flex items-center justify-center gap-2">
+                    <span>Serverless AI chat using Puter.js</span>
+                    <span>•</span>
+                    <a href="https://developer.puter.com" target="_blank" rel="noopener noreferrer" class="hover:text-sky-400 transition font-medium underline underline-offset-2 flex items-center gap-1">
+                        <i class="fa-solid fa-bolt text-[9px] text-amber-400"></i> Powered by Puter
+                    </a>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+                <h3 class="font-bold text-sm text-white flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-sky-400"></i> Chat Settings
+                </h3>
+                <button id="closeSettingsBtn" class="text-slate-400 hover:text-white">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4 text-xs">
+                <div>
+                    <label class="block font-medium text-slate-300 mb-1.5">System Prompt Instructions</label>
+                    <textarea id="systemPromptInput" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-200 focus:outline-none focus:border-sky-500" placeholder="e.g. You are an expert AI research assistant. Provide concise, grounded answers."></textarea>
+                    <p class="text-[10px] text-slate-500 mt-1">Configures the underlying behavior and tone of the model.</p>
+                </div>
+
+                <div>
+                    <div class="flex justify-between items-center mb-1.5">
+                        <label class="font-medium text-slate-300">Temperature</label>
+                        <span id="tempValue" class="text-sky-400 font-mono">0.7</span>
+                    </div>
+                    <input type="range" id="tempSlider" min="0" max="1" step="0.05" value="0.7" class="w-full accent-sky-500 cursor-pointer">
+                    <div class="flex justify-between text-[10px] text-slate-500">
+                        <span>Precise (0.0)</span>
+                        <span>Balanced (0.7)</span>
+                        <span>Creative (1.0)</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block font-medium text-slate-300 mb-1.5">Max Output Tokens</label>
+                    <input type="number" id="maxTokensInput" value="2000" min="200" max="8000" step="100" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-sky-500 font-mono">
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-end gap-2">
+                <button id="saveSettingsBtn" class="bg-sky-500 hover:bg-sky-400 text-white font-medium text-xs px-4 py-2 rounded-xl transition">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
+</html>

@@ -20,12 +20,14 @@ class RAGGenerator:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         model_name: str = "gpt-4o-mini",
         temperature: float = 0.1,
         max_tokens: int = 1500,
         max_query_length: int = 1000,
     ):
         self.api_key = api_key
+        self.base_url = base_url
         self.model_name = model_name
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -34,7 +36,10 @@ class RAGGenerator:
         self.client: Optional[OpenAI] = None
         if self.api_key and self.api_key.strip():
             try:
-                self.client = OpenAI(api_key=self.api_key)
+                kwargs = {"api_key": self.api_key}
+                if self.base_url and self.base_url.strip():
+                    kwargs["base_url"] = self.base_url.strip()
+                self.client = OpenAI(**kwargs)
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI client: {e}")
                 self.client = None

@@ -16,6 +16,7 @@ class AppConfig:
 
     # LLM Settings
     openai_api_key: Optional[str]
+    openai_base_url: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     openai_temperature: float = 0.1
     openai_max_tokens: int = 1500
@@ -52,20 +53,28 @@ class AppConfig:
 def get_config() -> AppConfig:
     """Loads configuration prioritizing Streamlit secrets, then environment variables, then defaults."""
     api_key: Optional[str] = None
+    base_url: Optional[str] = None
 
     # Check Streamlit secrets first if running in Streamlit runtime
     try:
         import streamlit as st
-        if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
-            api_key = st.secrets["OPENAI_API_KEY"]
+        if hasattr(st, "secrets"):
+            if "OPENAI_API_KEY" in st.secrets:
+                api_key = st.secrets["OPENAI_API_KEY"]
+            if "OPENAI_BASE_URL" in st.secrets:
+                base_url = st.secrets["OPENAI_BASE_URL"]
     except Exception:
         pass
 
     if not api_key:
         api_key = os.getenv("OPENAI_API_KEY")
 
+    if not base_url:
+        base_url = os.getenv("OPENAI_BASE_URL")
+
     return AppConfig(
         openai_api_key=api_key if api_key and api_key.strip() else None,
+        openai_base_url=base_url if base_url and base_url.strip() else None,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         openai_temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.1")),
         embedding_model_name=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),

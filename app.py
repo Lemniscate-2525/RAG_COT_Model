@@ -90,7 +90,8 @@ with st.sidebar:
     # Diagnostics & Security badges
     st.caption("🔒 Security Guardrails: SSRF protection, prompt injection boundary isolation, citation validation.")
     has_key = bool(config.openai_api_key)
-    st.caption(f"🧠 Generation: {'OpenAI (' + config.openai_model + ')' if has_key else 'Retrieval-Only Mode (No API Key)'}")
+    provider_name = "Puter AI" if (config.openai_base_url and "puter" in config.openai_base_url.lower()) else ("Custom Endpoint" if config.openai_base_url else "OpenAI")
+    st.caption(f"🧠 Generation: {f'{provider_name} ({config.openai_model})' if has_key else 'Retrieval-Only Mode (No API Key)'}")
 
 # Ingestion Execution Handler
 if ingest_clicked:
