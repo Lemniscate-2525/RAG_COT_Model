@@ -1,0 +1,27 @@
+[
+  {
+    "id": "q1",
+    "question": "What are the latest developments in generative AI models and reasoning capabilities?",
+    "relevant_post_ids": [101, 102],
+    "reference_answer": "Recent developments emphasize grounded chain-of-thought, smaller efficient models, and verifiable evidence trails."
+  },
+  {
+    "id": "q2",
+    "question": "How do vector databases handle cosine similarity with normalized vectors?",
+    "relevant_post_ids": [201],
+    "reference_answer": "When vectors are L2-normalized, the inner product is mathematically identical to cosine similarity, enabling efficient IndexFlatIP search."
+  },
+  {
+    "id": "q3",
+    "question": "What security risks does SSRF pose to server-side ingestion pipelines?",
+    "relevant_post_ids": [301, 302],
+    "reference_answer": "SSRF allows attackers to target internal microservices, loopback interfaces, or cloud metadata endpoints unless strict URL and DNS validation is enforced."
+  },
+  {
+    "id": "q4",
+    "question": "Why should retrieved content be treated as untrusted data in RAG architectures?",
+    "relevant_post_ids": [401],
+    "reference_answer": "Retrieved content may contain adversarial prompt injections designed to hijack the model instructions, leak secrets, or alter safety constraints."
+  }
+]
+

@@ -1,7 +1,27 @@
+# Python environment & cache
 .venv/
 venv/
+env/
 __pycache__/
 *.py[cod]
+*$py.class
+*.pytest_cache/
+.coverage
+htmlcov/
+
+# Local secrets & configs
 .env
+.env.local
 .streamlit/secrets.toml
+*.log
+
+# Vector store & temporary exports
+*.faiss
+*.index
+*.meta.json
+data/cache/
+data/indexes/
+
+# OS artifacts
 .DS_Store
+Thumbs.db

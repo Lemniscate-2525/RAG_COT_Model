@@ -1,128 +1,237 @@
-import html, os, re, json
-from dataclasses import asdict, dataclass
-from typing import List
-import faiss, numpy as np, requests, streamlit as st
-from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
+"""Streamlit frontend for RAG_COT_Model: Explainable Evidence-Grounded Assistant."""
 
-@dataclass
-class Chunk:
-    text: str
-    title: str
-    url: str
-    post_id: int
-    chunk_id: int
+import os
+from typing import List, Dict, Any, Optional
+import streamlit as st
 
-def clean(value):
-    return re.sub(r"\s+", " ", html.unescape(BeautifulSoup(value or "", "html.parser").get_text(" ", strip=True))).strip()
+from config import get_config
+from ingestion.wordpress import WordPressClient, Article
+from ingestion.url_validator import validate_target_url
+from retrieval.chunking import TextChunker, TextChunk
+from retrieval.embeddings import EmbeddingManager
+from retrieval.vector_store import FAISSVectorStore
+from retrieval.retriever import Retriever
+from generation.llm import RAGGenerator
+from generation.models import GeneratedAnswer
+from generation.guardrails import sanitize_for_display
+from utils.exceptions import RAGException, SSRFSecurityError
+from utils.logging_config import logger
 
-def split_chunks(text, size=900, overlap=150):
-    text = re.sub(r"\s+", " ", text).strip()
-    if size <= 0 or overlap < 0 or overlap >= size:
-        raise ValueError("Require size > 0 and 0 <= overlap < size")
-    result, start = [], 0
-    while start < len(text):
-        end = min(start + size, len(text))
-        if end < len(text):
-            boundary = text.rfind(" ", start + int(size * .7), end)
-            if boundary > start: end = boundary
-        if text[start:end].strip(): result.append(text[start:end].strip())
-        if end >= len(text): break
-        start = max(end - overlap, start + 1)
-    return result
+# Configure Streamlit page layout
+st.set_page_config(
+    page_title="RAG_COT — Explainable Evidence Chatbot",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-@st.cache_resource
-def embedder():
-    return SentenceTransformer(os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"))
+# Load application configuration
+config = get_config()
 
-def fetch_chunks(site, pages=2, per_page=50):
-    out, seen = [], set()
-    for page in range(1, pages + 1):
-        r = requests.get(site.rstrip("/") + "/wp-json/wp/v2/posts",
-            params={"page":page,"per_page":min(100,per_page),"_fields":"id,link,title,content"}, timeout=20)
-        if r.status_code == 400 and page > 1: break
-        r.raise_for_status()
-        batch = r.json()
-        for post in batch:
-            pid = int(post["id"])
-            if pid in seen: continue
-            seen.add(pid)
-            title = clean(post.get("title",{}).get("rendered","")) or "Untitled"
-            body = clean(post.get("content",{}).get("rendered",""))
-            for i, text in enumerate(split_chunks(title + "\n\n" + body)):
-                out.append(asdict(Chunk(text,title,post.get("link",site),pid,i)))
-        if len(batch) < min(100,per_page): break
-    if not out: raise ValueError("No posts found. Check the site URL and public WordPress REST API.")
-    return out
+@st.cache_resource(show_spinner=False)
+def get_cached_embedding_manager(model_name: str) -> EmbeddingManager:
+    """Loads and caches the SentenceTransformer model in memory across user sessions."""
+    logger.info(f"Initializing cached EmbeddingManager for: {model_name}")
+    return EmbeddingManager(model_name=model_name)
 
-def make_index(chunks):
-    vec = np.asarray(embedder().encode([x["text"] for x in chunks], normalize_embeddings=True), dtype="float32")
-    idx = faiss.IndexFlatIP(vec.shape[1])  # normalized vectors => cosine similarity
-    idx.add(vec)
-    return idx
+# Initialize user session state variables
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-def retrieve(question, chunks, index, k=3):
-    if index is None or index.ntotal == 0: return []
-    q = np.asarray(embedder().encode([question], normalize_embeddings=True), dtype="float32")
-    scores, ids = index.search(q, min(max(1, int(k)), index.ntotal))
-    result = []
-    for score, i in zip(scores[0], ids[0]):
-        if i < 0 or i >= len(chunks): continue  # FAISS missing-neighbour sentinel
-        item = dict(chunks[int(i)]); item["score"] = float(score); result.append(item)
-    return result
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
 
-def answer(question, docs):
-    if not docs:
-        return "No relevant source chunks were retrieved.", ["No evidence was retrieved; I cannot answer from this corpus."], []
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        return ("LLM generation is not configured. Review the retrieved evidence below; this is not a generated answer.",
-                ["Embedded the question.", f"Retrieved {len(docs)} chunks by cosine similarity.", "Inspect the cited passages; similarity is not proof of factual support."], docs)
-    try:
-        from openai import OpenAI
-        sources = "\n\n".join(f"[S{i+1}] {d['title']} | {d['url']}\n{d['text']}" for i,d in enumerate(docs))
-        prompt = f"""Answer only from these sources. If unsupported, say so. Return JSON keys: answer, evidence_steps (3-5 concise user-facing checks of evidence, not private chain-of-thought), used_sources (labels S1, S2...). Question: {question}\nSources:\n{sources}"""
-        response = OpenAI(api_key=key).chat.completions.create(
-            model=os.getenv("OPENAI_MODEL","gpt-4o-mini"), temperature=0.1,
-            response_format={"type":"json_object"},
-            messages=[{"role":"system","content":"Ground every claim in the provided sources. Give concise, verifiable evidence summaries, not hidden chain-of-thought."},{"role":"user","content":prompt}])
-        data = json.loads(response.choices[0].message.content)
-        used = set(data.get("used_sources", []))
-        cited = [d for i,d in enumerate(docs) if not used or f"S{i+1}" in used]
-        return str(data.get("answer","No answer returned.")), data.get("evidence_steps",[]), cited
-    except Exception as e:
-        return f"Generation failed ({e}). Retrieved passages are shown below instead.", ["No generated reasoning is claimed because the LLM call failed."], docs
+if "article_count" not in st.session_state:
+    st.session_state.article_count = 0
 
-st.set_page_config(page_title="WordPress RAG Evidence", page_icon="🔎", layout="wide")
-st.title("WordPress RAG — Evidence & Reasoning")
-st.caption("Fetch → clean → chunk with overlap → embed → retrieve → answer → inspect sources.")
+if "source_site" not in st.session_state:
+    st.session_state.source_site = config.default_wordpress_url
+
+# Sidebar Navigation & Ingestion Controls
 with st.sidebar:
-    site = st.text_input("WordPress site URL", os.getenv("WORDPRESS_SITE_URL","https://techcrunch.com"))
-    pages = st.slider("Pages to fetch",1,10,2)
-    per_page = st.slider("Posts per page",5,100,50,step=5)
-    k = st.slider("Retrieved chunks",1,8,3)
-    st.caption("Set OPENAI_API_KEY for generated answers and evidence-step summaries.")
-    load = st.button("Fetch and index",type="primary")
-if "chunks" not in st.session_state: st.session_state.chunks, st.session_state.index = [], None
-if load:
+    st.title("⚙️ RAG Configuration")
+    st.markdown("---")
+
+    st.subheader("Content Ingestion")
+    site_url = st.text_input(
+        "WordPress Site URL",
+        value=st.session_state.source_site,
+        help="Public WordPress website URL exposing the REST API (/wp-json/wp/v2/posts).",
+    )
+
+    col_articles, col_pages = st.columns(2)
+    with col_articles:
+        num_articles = st.number_input("Max Articles", min_value=5, max_value=config.max_articles_to_fetch, value=25, step=5)
+    with col_pages:
+        per_page = st.number_input("Per Page", min_value=5, max_value=50, value=20, step=5)
+
+    st.markdown("---")
+    st.subheader("Retrieval Settings")
+    top_k = st.slider("Top-K Passages", min_value=1, max_value=config.max_top_k, value=config.default_top_k)
+    dedup_posts = st.checkbox("Deduplicate Articles", value=True, help="Return at most one chunk per article in results.")
+
+    st.markdown("---")
+    st.subheader("Index Status")
+    vs: Optional[FAISSVectorStore] = st.session_state.vector_store
+    if vs is not None and vs.total_vectors > 0:
+        st.success(f"🟢 Index Active: **{vs.total_vectors}** chunks ({st.session_state.article_count} articles)")
+    else:
+        st.warning("⚪ Index Not Initialized")
+
+    # Ingestion button
+    ingest_clicked = st.button("🚀 Fetch and Index Articles", type="primary", use_container_width=True)
+
+    # Chat controls
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+    # Diagnostics & Security badges
+    st.caption("🔒 Security Guardrails: SSRF protection, prompt injection boundary isolation, citation validation.")
+    has_key = bool(config.openai_api_key)
+    st.caption(f"🧠 Generation: {'OpenAI (' + config.openai_model + ')' if has_key else 'Retrieval-Only Mode (No API Key)'}")
+
+# Ingestion Execution Handler
+if ingest_clicked:
     try:
-        with st.spinner("Fetching, chunking and embedding posts..."):
-            chunks = fetch_chunks(site,pages,per_page); index = make_index(chunks)
-            st.session_state.chunks, st.session_state.index = chunks,index
-        st.success(f"Indexed {len(chunks)} chunks.")
-    except Exception as e: st.error(f"Indexing failed: {e}")
-if st.session_state.index is not None:
-    st.info(f"Index contains {len(st.session_state.chunks)} chunks.")
-    q = st.text_input("Ask a question about these posts")
-    if st.button("Ask",type="primary",disabled=not q.strip()):
-        docs = retrieve(q.strip(),st.session_state.chunks,st.session_state.index,k)
-        response, steps, cited = answer(q.strip(),docs)
-        st.subheader("Answer"); st.write(response)
-        st.subheader("Evidence trail")
-        for i,step in enumerate(steps,1): st.markdown(f"{i}. {step}")
-        st.subheader("Retrieved sources")
-        if not cited: st.warning("No sources to display.")
-        for i,d in enumerate(cited,1):
-            with st.expander(f"{i}. {d['title']} · cosine={d.get('score',0):.3f}"):
-                st.markdown(f"[Open source]({d['url']})"); st.write(d["text"])
-else: st.info("Choose a WordPress URL and click Fetch and index.")
+        # Validate URL scheme and SSRF safeguards
+        validate_target_url(site_url)
+
+        with st.status("Ingesting and Indexing Articles...", expanded=True) as status:
+            st.write("1. Validating URL & Connecting to WordPress REST API...")
+            client = WordPressClient(base_url=site_url, timeout=config.request_timeout_seconds)
+            articles: List[Article] = client.fetch_articles(max_articles=int(num_articles), per_page=int(per_page))
+            st.write(f"✓ Ingested {len(articles)} articles.")
+
+            st.write("2. Cleaning HTML & Splitting into Overlapping Chunks...")
+            chunker = TextChunker(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap)
+            chunks: List[TextChunk] = chunker.chunk_articles(articles)
+            st.write(f"✓ Created {len(chunks)} text chunks.")
+
+            st.write("3. Generating Vector Embeddings...")
+            embedder = get_cached_embedding_manager(config.embedding_model_name)
+            vectors = embedder.encode([c.text for c in chunks], batch_size=config.embedding_batch_size)
+            st.write(f"✓ Generated {vectors.shape[0]} embeddings ({vectors.shape[1]}-d).")
+
+            st.write("4. Building FAISS IndexFlatIP...")
+            new_vs = FAISSVectorStore(dimension=vectors.shape[1])
+            new_vs.add_chunks(chunks, vectors)
+
+            # Store in session state
+            st.session_state.vector_store = new_vs
+            st.session_state.article_count = len(articles)
+            st.session_state.source_site = site_url
+            status.update(label=f"Ready! Indexed {len(chunks)} chunks from {len(articles)} articles.", state="complete", expanded=False)
+
+        st.rerun()
+
+    except SSRFSecurityError as e:
+        st.error(f"Security Alert (SSRF Blocked): {e}")
+        logger.warning(f"User entered blocked URL '{site_url}': {e}")
+    except RAGException as e:
+        st.error(f"Ingestion Failed: {e}")
+        logger.error(f"Ingestion error: {e}")
+    except Exception as e:
+        st.error(f"An unexpected error occurred during ingestion: {str(e)}")
+        logger.exception("Unexpected error during article ingestion")
+
+# Main Interface Header
+st.title("🔎 RAG_COT — Explainable Evidence Chatbot")
+st.markdown(
+    "Ask questions grounded in indexed WordPress articles. Every claim is accompanied by a "
+    "**verifiable evidence trail** citing specific source passages."
+)
+
+# Display Chat History
+for msg in st.session_state.messages:
+    role = msg.get("role", "user")
+    with st.chat_message(role):
+        st.markdown(sanitize_for_display(msg.get("content", "")))
+
+        # If assistant message has evidence steps, display them
+        steps = msg.get("evidence_steps", [])
+        if steps:
+            with st.expander("🔍 Evidence Trail & Reasoning", expanded=False):
+                for i, step in enumerate(steps, 1):
+                    src_tag = f" `[{', '.join(step.get('source_ids', []))}]`" if step.get("source_ids") else ""
+                    st.markdown(f"**Step {i}:** {sanitize_for_display(step.get('explanation', ''))}{src_tag}")
+
+        # If assistant message has source passages, display them
+        sources = msg.get("sources", [])
+        if sources:
+            with st.expander(f"📚 Retrieved Source Passages ({len(sources)})", expanded=False):
+                for s in sources:
+                    score = s.get("similarity_score", 0.0)
+                    st.markdown(f"**[{s.get('source_label', 'S')}] [{s.get('title', 'Source')}]({s.get('url', '#')})** — *Cosine Similarity: {score:.3f}*")
+                    st.text(s.get("text", "")[:400] + ("..." if len(s.get("text", "")) > 400 else ""))
+                    st.divider()
+
+# User Input Box
+current_vs: Optional[FAISSVectorStore] = st.session_state.vector_store
+
+if current_vs is None or current_vs.total_vectors == 0:
+    st.info("👈 Enter a WordPress URL in the sidebar and click **'Fetch and Index Articles'** to get started.")
+else:
+    user_query = st.chat_input("Ask a question about the indexed articles...")
+    if user_query:
+        # Check input bounds
+        clean_query = user_query.strip()
+        if len(clean_query) > config.max_query_length:
+            st.warning(f"Query truncated to maximum allowed {config.max_query_length} characters.")
+            clean_query = clean_query[:config.max_query_length]
+
+        # 1. Render user message
+        st.session_state.messages.append({"role": "user", "content": clean_query})
+        with st.chat_message("user"):
+            st.markdown(sanitize_for_display(clean_query))
+
+        # 2. Retrieve passages
+        with st.chat_message("assistant"):
+            with st.spinner("Retrieving evidence and synthesizing grounded answer..."):
+                embedder = get_cached_embedding_manager(config.embedding_model_name)
+                retriever = Retriever(vector_store=current_vs, embedding_manager=embedder)
+                docs = retriever.retrieve(clean_query, top_k=top_k, deduplicate_articles=dedup_posts)
+
+                # Attach source labels S1, S2...
+                for idx, d in enumerate(docs, 1):
+                    d["source_label"] = f"S{idx}"
+
+                generator = RAGGenerator(
+                    api_key=config.openai_api_key,
+                    model_name=config.openai_model,
+                    temperature=config.openai_temperature,
+                )
+                generated: GeneratedAnswer = generator.generate_answer(clean_query, docs)
+
+                # Filter docs to those used if used_sources was specified
+                used_set = set(generated.used_sources)
+                relevant_docs = [d for d in docs if not used_set or d["source_label"] in used_set] if docs else []
+
+                # Render answer
+                st.markdown(sanitize_for_display(generated.answer))
+
+                # Render evidence steps
+                if generated.evidence_steps:
+                    with st.expander("🔍 Evidence Trail & Reasoning", expanded=True):
+                        for i, step in enumerate(generated.evidence_steps, 1):
+                            src_tag = f" `[{', '.join(step.source_ids)}]`" if step.source_ids else ""
+                            st.markdown(f"**Step {i}:** {sanitize_for_display(step.explanation)}{src_tag}")
+
+                # Render sources
+                if relevant_docs:
+                    with st.expander(f"📚 Retrieved Source Passages ({len(relevant_docs)})", expanded=False):
+                        for s in relevant_docs:
+                            score = s.get("similarity_score", 0.0)
+                            st.markdown(f"**[{s.get('source_label', 'S')}] [{s.get('title', 'Source')}]({s.get('url', '#')})** — *Cosine Similarity: {score:.3f}*")
+                            st.text(s.get("text", "")[:400] + ("..." if len(s.get("text", "")) > 400 else ""))
+                            st.divider()
+
+                # Save assistant response to session history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": generated.answer,
+                    "evidence_steps": [s.model_dump() for s in generated.evidence_steps],
+                    "sources": relevant_docs,
+                    "insufficient_evidence": generated.insufficient_evidence,
+                })

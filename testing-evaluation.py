@@ -19,8 +19,9 @@ from sklearn.metrics import accuracy_score
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
-nltk.download('punkt')
-nltk.download('stopwords')
+if __name__ == "__main__":
+    nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
 
 # Mock functions for demonstration purposes
 def fetch_data(query: str) -> Dict:
